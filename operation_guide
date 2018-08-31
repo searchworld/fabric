@@ -1,0 +1,455 @@
+# 3. Operation guide
+## 3.1 Membership Service Providers (MSP)
+MSP将发行和校验证书、用户认证背后的密码学机制和协议抽象出来。一个MSP可以定义自己的身份概念、这些身份的管理规则（身份校验）和授权（签名生成和验证）
+一个Fabric区块链网络可以由一个或者多个MSP管理，提供模块化的membership操作和跨不同membership标准和架构的互操性。
+
+### MSP Configuration
+为了建立一个==MSP实例==，配置需要需要在每个peer和orderer本地指定，用于激活peer和orderer签名；每个channel也要指定，用于peer、orderer和client身份validation以及所有channel成员相应的签名verification（authentication）
+首先，每个MSP需要指定一个名称用于引用网络中的MSP(比如msp1，org3.divA)。根据这个名称确定一个代表财团/组织/org division的MSP在channel中的引用，称为MSP identifier 或者 MSP ID。每个MSP实例的MSP ID要求唯一，如果两个ID一样，orderer会失败。
+在默认的MSP实现中，为了完成identity(certificate) validation和signature verification有很多参数需要指定。这些参数来自[RFC5280](http://www.ietf.org/rfc/rfc5280.txt)：
+- 组成Root of trust的一个self-signed(X.509)证书
+- intermediate CA的X.509证书列表，用于certificate validation。这些ICA必须是由某一个RootCA签发的，是可选的
+- 一个表示MSP管理员的X.509证书列表，由RCA或者ICA签发。管理员证书的所有者被授权对MSP配置（比如RCA ICA）进行变更
+- 一个OU列表，可选，当多个组织使用相同的root of trust和ICA且为他们的成员保留了一个OU字段
+- CRL列表，每个对应一个RCA或者ICA，可选
+- self-signed X.509证书，组成TLS root of trust
+- TLS ICA，由某一个TLS RCA签发，可选
+
+MSP实例有效的身份要满足下面的条件：
+- X.509证书格式，且证书路径可以追溯到RCA的一个X.509证书
+- 不包含在任何CRL里
+- ==在X.509证书的OU字段中有MSP配置的一个或者多个OU==
+
+除了相关的验证参数，==MSP为了在实例化的node能够进行签名或者认证==，还要指定：
+- node签名的时候使用的signing key（当前只支持ECDSA key）
+- 节点的X.509证书，是这个MSP的验证参数下的一个有效身份
+
+MSP身份不会过期，只能通过加到CRL里进行移除，目前不支持TLS证书的移除。
+
+### MSP Identity Validity Rules
+```
+        rCA1                rCA2         rCA3
+      /    \                 |            |
+   iCA1    iCA2             iCA3          id
+    / \      |               |
+iCA11 iCA12 id              id
+ |
+id
+```
+一个ICA只能由一个RCA或者上层的ICA签发。在现在默认的MSP实现中，上图只有iCA11/iCA12/iCA2/iCA3/rCA3签发的证书才是有效的，中间节点签发的会被拒绝。
+如果在MSP配置中指定一个或者多个Organization units也会影响到一个证书的有效性。一个ou在MSP配置中是一个two value pair，比如(parent-cert, ou-string)，表示证明那个ou的CA和相应的实际ou身份。如果在MSP配置中指定了OU，其证书C由iCA或者rCA签发，==只有C的ou字段包含ou-string，C才是有效的==。
+
+### How to generate MSP certificates and their signing keys?
+可以使用Openssl来生成X.509证书，Fabric不支持RSA。还可以使用cryptogen来生成。Hyperledger Fabric CA也可以用来生成key和证书。
+
+### MSP setup on the peer & orderer side
+为peer或者orderer设置一个MSP，管理员需要创建一个文件夹，比如$MY_PATH/mspconfig，包含下面6个子目录：
+- admincerts，每个管理员证书对应的PEM文件
+- cacerts，每个root CA的证书对应的PEM文件
+- intermediatecerts，可选，每个ICA证书对应的PEM文件
+- config.yaml，可选，用于支持OU和身份分类
+- crls，可选，包括CRLs
+- keystore，包含当前node的私钥的PEM文件
+- signcerts，node的X.509证书的PEM文件
+- tlscacerts，可选，每个TLS root CA证书对应的PEM文件
+- tlsintermediatecerts，可选，每个TLS ICA证书对应的PEM文件
+
+在node的配置文件里(peer对应的core.yaml，orderer对应的orderer.yaml)需要指定到mspconfig目录的路径和这个node的MSP的MSP ID。mspconfig的路径是到`FABRIC_CFG_PATH`的相对路径，对peer来说是`mspConfigPath`参数，对orderer来说是`LocalMSPDir`参数。node的MSP身份是参数`localMspId`(对于peer)或者`LocalMSPID`(对于orderer)对应的值。这些参数可以通过CORE前缀(对于peer，比如`CORE_PEER_LOCALMSPID`)和ORDERER前缀(对于orderer，比如`ORDERER_GENERAL_LOCALMSPID`)的环境参数覆盖。==对于orderer设置，需要提供system channel的genesis block。==
+local MSP只能手动重新配置，而且要求peer或者orderer进程重启，后面的版本会考虑使用动态配置（通过一个node managed system chaincode）
+
+### Organization Units
+为了配置MSP有效的成员需要包含在他们的X.509证书上的Organization Units，`config.yaml`需要指定organizational unit身份配置：
+```
+OrganizationalUnitIdentifiers:
+  - Certificate: "cacerts/cacert1.pem"
+    OrganizationalUnitIdentifier: "commercial"
+  - Certificate: "cacerts/cacert2.pem"
+    OrganizationalUnitIdentifier: "administrators"
+```
+上面的配置声明了两个OU身份：commercial和administrators。一个MSP身份只有包含这两个OU里的至少一个才是有效的。`Certificate`字段指向RCA或者ICA证书路径，这些路径下的证书包含指定的OU，路径是到MSP root文件夹的相对路径。
+
+### Identity Classification
+默认的MSP实现允许基于x509证书的OUs将身份进一步分成client和peer。如果一个身份用于submit transaction，查询peer等，那应该分为client；如果一个身份可以背书或者commit transaction，则分为peer。`config.yaml`配置如下：
+```
+NodeOUs:
+  Enable: true
+  ClientOUIdentifier:
+    Certificate: "cacerts/cacert.pem"
+    OrganizationalUnitIdentifier: "client"
+  PeerOUIdentifier:
+    Certificate: "cacerts/cacert.pem"
+    OrganizationalUnitIdentifier: "peer"
+```
+`NodeOUs.Enable`要设置为true，激活identity classification，然后client(peer)身份通过为`NodeOUs.ClientOUIdentifier` (`NodeOUs.PeerOUIdentifier)`设置下面的属性来定义：
+- `OrganizationalUnitIdentifier`，==client(peer)的x509证书包含的OU对应的值==
+- `Certificate`，client(peer)身份校验的RCA或者ICA，是到MSP root文件夹的相对路径，可以为空，表示可以使用MSP配置中定义的任何CA来校验。
+
+当分类激活的时候，MSP 管理员必须是这个MSP的client，意味着他们的x509证书需要携带能够识别client的OU。一个身份只能是client和peer中的一个。
+
+
+### Channel MSP setup
+系统刚开始的时候，所有网络中出现的MSP校验参数都需要指定并包含在system channel的genesis block中，在setup阶段提供给orderer用于在channel创建的时候认证。
+对于application channel，genesis block只要有管理channel的MSP的verification组件。在peer加入网络之前正确的MSP配置信息要包含在genesis block里，这是application的责任。
+当使用`configtxgen`工具启动channel的时候，可以通过将MSP的verification参数放在mspconfig文件夹中，在configtx.yaml配置中指定这个路径。
+channel中一个MSP的重配置，包括宣布证书的CRL，是通过MSP管理员证书的一个owner创建一个`config_update`对象来实现的。这个admin管理的client application会向这个MSP出现的channel宣布这个更新。
+
+### Best Practices
+#### Mapping between organizations/corporations and MSPs
+推荐org和MSP直接一对一映射，如果不是一对一映射，需要考虑下面的情况：
+- 一个组织使用多个MSPs。这种case下一个org保护多个division，每个division对应一个MSP，可能是因为独立管理或者隐私的原因。这种case下一个peer只能被一个MSP拥有，不会将具有其他MSPs的身份的peer看做是相同的org。这个的意义是peer会通过gossip和相同subdivision的其他peer共享Organization-scoped数据，而不会和组成实际org的所有peer。
+- 多个org使用一个MSP。这种case对应使用相似membership架构的多个orgs组成一个consortium，peer会传播organization-scoped数据给具有相同MSP身份的其他peer，而不管他们是不是属于同一个实际组织。这是MSP定义粗粒度的局限。
+
+#### One organization has different divisions (say organizational units), to which it wants to grant access to different channels.
+有两种方式来处理：
+- 定义一个MSP来容纳所有组织成员的membership。MSP的配置包含一个RCAs列表、ICAs列表和admin证书列表；成员身份会包含成员所属的OU。然后可以针对一个指定OU定义policy，这些policy可能包含channel的read/write policy或者chaincode的endorsement policy。这种方式的局限性是gossip的时候会向具有相同local MSP身份的成员传播organization-scoped数据
+- 为每个division定义一个MSP。每个division有自己的一套MSP配置，彼此没有交集。比如每个subdivision有一个不同的ICA。这样的局限是需要管理多个MSP，但是可以避免上一种方式的问题。可以通过利用MSP配置的OU扩展为每个division定义一个MSP。
+
+#### Separating clients from peers of the same organization.
+==许多场景下要求一个身份的类型可以从身份本身获取(比如可能需要endorsement保证由peer派生，而不是仅仅作为orderer的client或者node)。==
+这些要求的支持比较有限。一个允许这种分离的方式是为每种node类型创建一个独立的ICA——一个给clients，一个给peers/orderers；配置两个不同的MSPs——一个给clients，一个给peers/orderers。这个org的channel需要包含两个MSPs，而endorsement policy只会使用指向peers的MSP。这最终导致org映射到两个MSP实例，对peer和client的交流有营销。
+由于相同组织的peer属于同一个MSP，因此gossip不会受到影响。peer可以基于本地MSP策略限制特定system chaincode的执行。比如peers只能执行"joinChannel"请求，如果这个请求由local MSP的管理员签名，且这个管理员是一个client。如果我们配置peer/orderer MSP的成员只有clients，则这个clients是MSP的administrators。
+
+==这种方式需要考虑的另外一点是peers根据请求发起者在peer本地MSP的membership对registration请求进行授权。==由于请求发起者是一个client，总是被认为和被请求的peer属于一个不同的MSP，这个peer会拒绝这个请求。
+
+#### Admin and CA certificates.
+MSP admin证书和任何RCA或者ICA不同，将membership component的管理职责和新证书的签发、证书的验证分离。
+
+#### Blacklisting an intermediate CA.
+MSP的重配置是通过`config_update`消息来实现的。有两种方式保证一个ICA不再用于身份验证：
+- 重配置MSP不再包含ICA签发的证书，对于本地配置的MSP，这意味着这个CA的证书从`intermediatecerts`目录移除。
+- 重配置MSP包含CRL，denounce这个ICA证书
+
+目前的MSP实现只支持第一个方式，比较简单
+
+#### CAs and TLS CAs
+MSP identities' root CAs 和 MSP TLS certificates' root CAs(和相应的intermediate CAs)需要在不同的目录下声明，这是为了避免不同分类的证书产生混乱。并不禁止对这两者使用相同的CAs，但是生产环境中最好不要使用。
+
+
+## 3.2 Channel Configuration (configtx)
+Fabric Blockchain network的共享配置保存在配置transaction里，每个channel有一份。每个configuration transaction通常称为`configtx`，有下面几个重要属性：
+- Versioned: 配置中的所有元素都有一个版本号，每次修改都会递增，每个commited的配置会收到一个序列号
+- Permissioned: 配置的每个元素都有一个关联的policy，用来管理对这个元素的修改是否被允许。任何具有前一个`configtx`副本都可以基于这些policy验证新配置的有效性
+- Hierarchical: root configuration包含sub-groups。层级结构中的每个group都有相应的values和policies，高层级的policy可以从低层级的派生。
+
+### Anatomy of a configuration
+block中的配置transaction类型是`HeaderType_CONFIG`，且不包含其他交易。这些block称为`Configuration Blocks`，第一个称为`Genesis Block`。
+```
+message ConfigEnvelope {
+    Config config = 1;        // A marshaled Config structure
+    Envelope last_update = 2; // The last CONFIG_UPDATE message which generated this current configuration
+                              // Note that CONFIG_UPDATE has a Payload.Data of a Marshaled ConfigUpdate
+}
+
+message Config {
+    // Prevent removed tag re-use
+    reserved 3;
+    reserved "type";
+
+    uint64 sequence = 1;
+    ConfigGroup channel_group = 2; // channel_group is a bad name for this, it should be changed to root when API breakage is allowed
+}
+
+message ConfigGroup {
+    uint64 version = 1;
+    map<string,ConfigGroup> groups = 2;
+    map<string,ConfigValue> values = 3;
+    map<string,ConfigPolicy> policies = 4;
+    string mod_policy = 5;
+}
+
+message ConfigValue {
+    uint64 version = 1;
+    bytes value = 2;
+    string mod_policy = 3;
+}
+
+message ConfigPolicy {
+    uint64 version = 1;
+    Policy policy = 2;
+    string mod_policy = 3;
+}
+```
+主要在`ConfigGroup`，是一个嵌套结构。`Values/Policies/Groups`都有一个`version`和`mod_policy`。每个元素的version在每次元素修改的时候都会递增。`mod_policy`用于管理修改元素需要的签名，对于Groups修改是往Values/Policies/Groups maps添加或者移除元素。对于Values和Policies(或者mod_policy)，变更是修改相应的Value或者Policy(或者修改mod_policy)。每个元素的mod_policy在当前层级的配置下evaluated，比如mod_policy定义在`Channel.Groups["Application"]`：
+- policy1映射到`Channel.Groups["Application"].Policies["policy1"]`
+- `Org1/policy2` maps to `Channel.Groups["Application"].Groups["Org1"].Policies["policy2"]`
+- `/Channel/policy3` maps to `Channel.Policies["policy3"]`
+
+如果mod_policy只选一个不存在的policy，则这个元素不能修改。
+
+### Configuration updates
+配置更新的类型是`HeaderType_CONFIG_UPDATE`，对于的结构如下：
+```
+message ConfigUpdateEnvelope {
+    bytes config_update = 1;
+    repeated ConfigSignature signatures = 2; // 包含授权这个更新的签名
+}
+message ConfigSignature {
+    bytes signature_header = 1;
+    bytes signature = 2;
+}
+message ConfigUpdate {
+    string channel_id = 1;
+    ConfigGroup read_set = 2;
+    ConfigGroup write_set = 3;
+}
+```
+channel_id是要更新的channel的id。`read_set`指定一个已有配置的子集，但是只需要保存对于的version字段。`ConfigValue`和`ConfigPolicy`不能在里面设置。`ConfigGroup`可能会有一个子集执行配置树的更深层的元素，比如要在`read_set`中包含`Application`，其父节点`Channel group`也要包含在里面，但是`Channel`不需要注入其他key，比如`Orderer group`或者任何`values/policies` 的key。
+`write_set`指定要修改的配置，对深层元素的写操作也要将上层的元素包含进去，但是类似`read_set`，也不能设置其他的key。
+比如给定下面的配置:
+```
+Channel: (version 0)
+    Orderer (version 0)
+    Application (version 3)
+       Org1 (version 2)
+```
+要对`Org1`进行变更，`read_set`如下：
+```
+Channel: (version 0)
+    Application: (version 3)
+```
+`write_set`如下：
+```
+Channel: (version 0)
+    Application: (version 3)
+        Org1 (version 3)
+```
+
+当收到`CONFIG_UPDATE`，orderer计算结果`CONFIG`:
+- 校验`channel_id`和`read_set`，read_set中的所有元素在配置中必须和read_set相同版本
+- 收集write_set中版本没有在read_set中出现的元素来计算update
+- 校验update中每个元素的version都是递增1
+- 校验携带的签名是否符合每个元素的mod_policy
+- 将update应用到当前配置中计算一份新版本配置
+- 将新配置写入`ConfigEnvelope`，其中`CONFIG_UPDATE`是`last_update`字段，新配置在`config`字段，sequence递增
+- 将新的`ConfigEnvelope`写入一个`CONFIG`类型的`Envelope`，作为唯一的transaction写入一个新的configuration block
+
+当peer(或者其他`Deliver`的接受者)收到这个配置block，通过将`last_update`应用到当前配置来校验orderer计算的config字段包含正确的新配置
+
+### Permitted configuration groups and values
+```
+&ConfigGroup{
+    Groups: map<string, *ConfigGroup> {
+        "Application":&ConfigGroup{
+            Groups:map<String, *ConfigGroup> {
+                {{org_name}}:&ConfigGroup{
+                    Values:map<string, *ConfigValue>{
+                        "MSP":msp.MSPConfig,
+                        "AnchorPeers":peer.AnchorPeers,
+                    },
+                },
+            },
+        },
+        "Orderer":&ConfigGroup{
+            Groups:map<String, *ConfigGroup> {
+                {{org_name}}:&ConfigGroup{
+                    Values:map<string, *ConfigValue>{
+                        "MSP":msp.MSPConfig,
+                    },
+                },
+            },
+
+            Values:map<string, *ConfigValue> {
+                "ConsensusType":orderer.ConsensusType,
+                "BatchSize":orderer.BatchSize,
+                "BatchTimeout":orderer.BatchTimeout,
+                "KafkaBrokers":orderer.KafkaBrokers,
+            },
+        },
+        "Consortiums":&ConfigGroup{
+            Groups:map<String, *ConfigGroup> {
+                {{consortium_name}}:&ConfigGroup{
+                    Groups:map<string, *ConfigGroup> {
+                        {{org_name}}:&ConfigGroup{
+                            Values:map<string, *ConfigValue>{
+                                "MSP":msp.MSPConfig,
+                            },
+                        },
+                    },
+                    Values:map<string, *ConfigValue> {
+                        "ChannelCreationPolicy":common.Policy,
+                    }
+                },
+            },
+        },
+    },
+
+    Values: map<string, *ConfigValue> {
+        "HashingAlgorithm":common.HashingAlgorithm,
+        "BlockHashingDataStructure":common.BlockDataHashingStructure,
+        "Consortium":common.Consortium,
+        "OrdererAddresses":common.OrdererAddresses,
+    },
+}
+```
+`{{org_name}}`表示任意多个的组织，`{{consortium_name}}`表示任意多个的consortium。
+### Orderer system channel configuration
+ordering system channel需要定义ordering参数和consortiums来创建channel。一个ordering service只能由一个ordering system channel，是一个被创建的channel。建议不要在ordering system channel里面定义Application，但是可以用来测试。对ordering system channel有读权限的成员都可以所有的channel创建过程，因此system channel的访问需要进行限制。
+ordering参数在上面的`Orderer`中定义，这个group只定义一个`MSP`参数，包含这个org的身份。Values决定ordering节点如何运行，==在每个channel都存在，因此可以在不同的channel中设置不同的值==。
+启动的时候orderer需要面对一个包含许多channel的信息的文件系统，orderer通过识别定义consortiums group的channel作为system channel。其配置见上面的`Consortiums`。每个consortium定义一个成员集，就行ordering org中的成员一样。每个consortium定义一个`ChannelCreationPolicy`，用于授权channel创建请求。通常这个值设置成一个`ImplicitMetaPolicy`，要求channel的新成员要签名授权channel创建。
+
+### Application channel configuration
+配置如果上面的`Application`模块。除了`MSP`身份信息外，每个org还要定义一个`AnchorPeers`列表，用于不同org的peer之间gossip。
+Application channel会包含一份`Orderer`配置的副本。
+
+### Channel creation
+orderer收到一个不存在的channel的`CONFIG_UPDATE`信息后，orderer认为这是一个创建请求：
+- orderer通过查看顶层group的`Consortium`值识别出channel是为哪个consortium创建的
+- orderer校验包含在`Application group`中的org是对应consortium的orgs的子集，version设置为1
+- orderer验证consortium有诚意，新的channel也有application members（没有成员的consortium和channel只有测试的时候才有意义）
+- orderer从system channel拿到`Orderer group`创建一个配置模板，创建一个新的application，包含新指定的成员；指定`mod_policy`为consortium config中指定的`ChannelCreationPolicy`，这个policy会在新的配置上下文中进行evaluate，因此一个要求`ALL`的policy要求来自所有新的channel成员的签名，而不是consortium的所有成员。
+- orderer将`CONFIG_UPDATE`应用到配置模板上。由于`CONFIG_UPDATE`将变更应用到`Application group`，==配置代码使用`ChannelCreationPolicy`校验更新==。如果channel创建包含其他变更，比如对单独的org anchor peer，这个元素对应的policy会被调用
+- 包含新channel配置的新的`CONFIG transaction`被发送到ordering system channel进行order，成功之后channel创建。
+
+
+## 3.3 Endorsement policies
+背书策略用于指导一个peer决定一个交易是否被正确背书。当peer收到一个transaction，会调用和交易链码相关联的VSCC来决定交易的有效性。交易包含来自许多背书节点的一个或者多个背书，VSCC的任务是做出下面的决定：
+- 所有背书都是有效的（来自有效证书的有效签名）
+- 有恰当数量的背书
+- 背书来自预期的source
+
+### Endorsement policy syntax in the CLI
+在CLI中使用基于principals之上的布尔表达式来表达policy。
+principal使用MSP来描述，用于校验签名的身份和签名者在MSP中的角色。支持四种角色：member/admin/client/peer，principal使用`MSP.ROLE`来描述，其中MSP是要求的MSP ID，ROLE是上面四种角色的一种，比如`Org0.admin`表示`Org0`这个MSP的任何管理员。语法如下：
+```
+EXPR(E[, E...])
+```
+其中`EXPR`是`AND`或者`OR`，表示两种布尔表达式；`E`可以是一个principal或者一个嵌套的`EXPR`。比如：
+- `AND('Org1.member', 'Org2.member', 'Org3.member')`表示这三个principals中都要有一个签名
+- `OR('Org1.member', 'Org2.member')`表示这两个principal中任意一个签名
+- `OR('Org1.member', AND('Org2.member', 'Org3.member'))`来自Org1的一个签名或者同事有Org2和Org3的签名
+
+### Specifying endorsement policies for a chaincode
+chaincode deployer可以要求一个chaincode使用指定的policy来校验。如果在instantiate的时候没有指定，背书策略默认为channel中的Organization中的任意成员。比如一个channel由`Org1`和`Org2`组成，默认策略是`OR(‘Org1.member’, ‘Org2.member’)`
+在实例化的时候使用`-P`来指定policy，比如: 
+```
+peer chaincode instantiate -C <channelid> -n mycc -P "AND('Org1.member', 'Org2.member')"
+```
+==如果激活了identity classification，可以使用`PEER`角色将背书限制到peer上。==
+chaincode实例化之后一个新的组织加入channel，则这个组织职能查询chaincode（假设查询已经适当授权），但是无法提交由他自身背书的交易。为了允许具有来自新组织背书的交易被提交需要修改背书策略。
+
+## 3.4 Pluggable transaction endorsement and validation
+
+
+## 3.5 Access Control Lists (ACL)
+Fabric使用ACLs来管理对资源的访问，每个资源会关联一个policy，在给定身份条件下计算这个policy的条件是true还是false。Fabric包含一系列的默认ACL
+
+### Resources
+用户通过`user chaincode`/`system chaincode`/`event stream source`和Fabric交互，这些endpoints被认为是资源，需要进行访问控制。
+应用开发者需要知道这些资源和资源的默认policy，可以参考[configtx.yaml](http://github.com/hyperledger/fabric/blob/release-1.2/sampleconfig/configtx.yaml)，这里面包含了详细的资源列表，格式为`<component>/<resource>`，比如`cscc/GetConfigBlock`表示cscc组件的GetConfigBlock资源。
+
+### Policies
+policy是Fabric运行的基础，因为通过资源关联的policy可以对请求携带的身份的进行检查。endorsement policy用来决定一个交易是否被恰当背书。在channel configuration中定义的policy既是modification policy也是访问控制。policy可以使用两种方式定义：
+- Signature policies，这些policy用来确认为了满足policy需要哪些用户需要签名，比如：
+  ```
+  Policies:
+  MyPolicy:
+    Type: Signature
+    Rule: “Org1.Peer OR Org2.Peer”
+  ```
+  这个policy可以解释为：名字为`MyPolicy`的policy需要来自`Org1`或者`Org2`的一个peer的签名才能满足。Signature policies支持`AND`/`OR`/`NOutOf`的任意组合，最终构造出强大的规则。
+- ImplicitMeta policies，对比较低层次的policies进行聚合，最终是`Signature policies`。支持类似`多数的组织管理员`这样的默认规则，语法为`<ALL|ANY|MAJORITY> <sub_policy>`，比如`ANY Readers`或者`MAJORITY Admins`。
+  ```
+  Policies:
+  AnotherPolicy:
+    Type: ImplicitMeta
+    Rule: "MAJORITY Admins"
+  ```
+  表示名称为`AnotherPolicy`的policy需要满足多数的Admin，Admin最终通过低层次的`Signature policy`。
+
+默认的policy配置里`Admins`是一个operational角色，用于进行网络的敏感或者运维操作，比如在channel上实例化chaincode。`Writers`用于propose账本更新，比如交易，但是没有管理权限。`Readers`是一个passive角色，可以访问信息，但是没有权限进行propose账本更新和管理任务。==如果使用了`NodeOU`功能，默认的policies可以通过`peer`和`client`角色来添加修改和增强。==
+
+### Where is access control specified?
+ACL默认存放于`configtx.yaml`，作为configtxgen工具的输入，用于构建channel配置。可以通过两种方式更新：修改`configtx.yaml`本身，会传播ACL变更到任何新的channel；在特定的channel的channel配置上更新Access control。
+
+### How ACLs are formatted in configtx.yaml
+以key-value的形式组成，key是resource function名称，
+```
+# ACL policy for invoking chaincodes on peer
+peer/Propose: /Channel/Application/Writers
+# ACL policy for sending block events
+event/Block: /Channel/Application/Readers
+```
+
+### Updating ACL defaults in configtx.yaml
+当bootstrap一个网络之前需要修改ACL，最好的方式是更新`configtx.yaml`。假设我们将`peer/Propose`(在一个peer上invoke chaincode的policy)的默认ACL：`/Channel/Application/Writers`修改为`MyPolicy`。
+```
+Policies: &ApplicationDefaultPolicies
+    Readers:
+        Type: ImplicitMeta
+        Rule: "ANY Readers"
+    Writers:
+        Type: ImplicitMeta
+        Rule: "ANY Writers"
+    Admins:
+        Type: ImplicitMeta
+        Rule: "MAJORITY Admins"
+    MyPolicy:
+        Type: Signature
+        Rule: "OR('SampleOrg.admin')"
+```
+这个policy定义在`configtx.yaml`的`Application.Policies`模块，并指定一个规则来检查是否授予或者拒绝用户访问。然后编辑`configtx.yaml`的`Application: ACLs`:
+```
+peer/Propose: /Channel/Application/Writers
+改为：
+peer/Propose: /Channel/Application/MyPolicy
+```
+configtxgen在创建channel creation交易的时候会使用定义policies和ACLs。当`MyPolicy` bootstrapped到channel配置的时候，可以引用过来覆盖其他默认ACL：
+```
+SampleSingleMSPChannel:
+    Consortium: SampleConsortium
+    Application:
+        <<: *ApplicationDefaults
+        ACLs:
+            <<: *ACLsDefault
+            event/Block: /Channel/Application/MyPolicy
+```
+上面的配置将提交block事件限制在`SampleOrg.admin`。
+
+### Updating ACL defaults in the channel config
+如果channel已经创建，但是还是想使用上面的`MyPolicy`限制对`peer/Propose`的访问，或者想创建其他channel不知道的ACLs，那就需要每次通过config update transaction来更新channel 配置。
+在`Application: policies`下增加`MyPolicy`(注意其中的`msp_identifier`和`role`)，和`Admins/Writers/Readers`同级:
+```
+"MyPolicy": {
+  "mod_policy": "Admins",
+  "policy": {
+    "type": 1,
+    "value": {
+      "identities": [
+        {
+          "principal": {
+            "msp_identifier": "SampleOrg",
+            "role": "ADMIN"
+          },
+          "principal_classification": "ROLE"
+        }
+      ],
+      "rule": {
+        "n_out_of": {
+          "n": 1,
+          "rules": [
+            {
+              "signed_by": 0
+            }
+          ]
+        }
+      },
+      "version": 0
+    }
+  },
+  "version": "0"
+},
+```
+然后再配置的ACLs模块，修改`peer/Propose`的ACL:
+```
+"peer/Propose": {
+  "policy_ref": "/Channel/Application/Writers"
+改为：
+"peer/Propose": {
+  "policy_ref": "/Channel/Application/MyPolicy"
+```
+==如果`MyPolicy`不是在channel配置中定义，那需要在这里添加整个ACL结构。==
+配置更新完之后只要通过政策的channel更新进程进行提交。
+
+### Satisfying an ACL that requires access to multiple resources
+如果一个成员请求调用多个system chaincode，这些system chaincode的所有ACLs都要满足。比如`peer/Propose`指向channel中任何proposal request。如果有个proposal要求访问两个system chaincode，且这两个system chaincode一个要求猫族`Writers`，另一个要求满足`MyPolicy`，那这个提交请求的成员的身份对`Writer`和`MyPolicy`都要为true。
+默认情况下，`Writers`是一个rule为`SampleOrg.memeber`的Signature policy，即org中的任何成员；`MyPolicy`的rule是`SampleOrg.admin`，即org的任何admin。要满足这些ACLs，member必须既是SampleOrg的成员，也是管理员。==默认情况下所有管理员也是成员（实际上并不要求所有管理员都是成员）。
