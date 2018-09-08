@@ -56,7 +56,7 @@ permissionless blockchain中所有数据对所有人都是可见的，但是企�
 区块链平台采用多种方式来实现，每种实现方式都有取舍：
 - 数据加密。但是由于数据在每个节点上都有，给与足够时间还是有可能被解密
 - Zero knowledge proofs (ZKP)，需要比较多的时间和计算资源
-- 在permissioned context现在保密信息的分布，只有授权的节点才能获取
+- 在permissioned context限制保密信息的分布，只有授权的节点才能获取
 
 Fabric使用channel架构来实现隐私和保密。参与者和网络中其他被授予某些交易可见性的的参与者建立channel，只有参与到channel中的节点才能访问智能合约和交易数据
 
