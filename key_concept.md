@@ -36,13 +36,13 @@ Asset的定义使得具有货币属性的任何东西都可以在网络上进行
 ### Chaincode
 
 ### Ledger Features
-Fabric上所有状态转移的顺序不可篡改的记录。状态转移是chaincode调用(transaction)的结果，每个交易形成一个asset的k-v稽核，最终提交给ledger作为创建、更新或者删除。
+Fabric上所有状态转移的顺序不可篡改的记录。状态转移是chaincode调用(transaction)的结果，每个交易形成一个asset的k-v集合，最终提交给ledger创建、更新或者删除相应的key。
 ledger由一个blockchain和一个state database组成，前者以block为单位存储不可变的顺序的记录，后者记录当前的状态。每个channel一个ledger，channel内的成员维护一份ledger的copy。
 一些特性：
 - 使用基于key的lookup、范围查询和复合key查询来进行ledger的查询和更新
 - 使用丰富的查询语言进行只读查询（CouchDB）
 - 历史的只读查询，用于数据溯源
-- transaction由chaincode读取的k-v（read set）和chaincode写的k-v（write set）的版本（不是具体值）组成
+- transaction由chaincode读取的k-v（read set）的版本（不是具体值）和chaincode写的k-v（write set）组成
 - transaction包含每一个背书节点的签名，并且被提交到order服务
 - transaction按顺序写入block，由order服务传送给peer
 - peer根据背书策略对transaction进行校验
@@ -67,7 +67,7 @@ consensus并不仅仅只是简单对交易顺序达成一致。consensus可以�
 区块链网络是为应用提供ledger和chaincode服务的技术基础设施。大多数情况下，多个组织组成一个财团组建这个网络，各个组织的许可由一个财团达成一致的策略组成。网络策略可以随着时间变化。
 
 ### Applications and Smart Contract chaincode
-client application只能通过chaincode来查询或者修改ledger。只有组织的管理员才能安装chaincode，当在P1上安装成功之后，P1指定chaincode的所有信息，包括实现逻辑。和实现相对应的是chaincode interface，只描述chaincode的输入和输出，不管具体实现。当有多个peer的时候，可以选择几个来安装，不需要全部安装。安装完成之后，channel中的其他组件并不知道chaincode的存在，必须先在channel上实例化，这个也是有组织的管理员操作。实例化之后channel中的所有组件都知道chaincode的存在，但是并不知道具体的实现逻辑，也就是只知道interface，即实例化的是接口，而而安装的是具体实现。可以理解为安装智能合约是在peer物理上，实例化是在channel上逻辑实现。
+client application只能通过chaincode来查询或者修改ledger。只有组织的管理员才能安装chaincode，当在P1上安装成功之后，P1指定chaincode的所有信息，包括实现逻辑。和实现相对应的是chaincode interface，只描述chaincode的输入和输出，不管具体实现。当有多个peer的时候，可以选择几个来安装，不需要全部安装。安装完成之后，channel中的其他组件并不知道chaincode的存在，必须先在channel上实例化，这个也是由组织的管理员操作。实例化之后channel中的所有组件都知道chaincode的存在，但是并不知道具体的实现逻辑，也就是只知道interface，即实例化的是接口，而安装的是具体实现。可以理解为智能合约是在peer上物理安装，实例化是在channel上逻辑安装。
 chaincode实例化的时候要提供的最重要的额外信息是endorsement policy，描述哪些组织必须同意交易，这个交易才会被接受到ledger里。背书策略会被写入到channel的配置里。
 
 ### Network completed
@@ -77,11 +77,11 @@ chaincode在不同的peer上可以有不同的实现，比如一个用golang，�
 
 peer的类型：
 - committing peer，channel中的每个peer都是，接受交易block，然后校验，最后追加到ledger
-- endorsing peer，安装有chaincode的peer，客户端应用使用智能合约产生带有数字签名的交易回复。chaincode的endorsement policy指定组织中哪些节点需要对交易进行数字签名。
+- endorsing peer，安装有chaincode的peer，客户端利用peer上安装的智能合约产生带有数字签名的交易回复。chaincode的endorsement policy指定组织中哪些节点需要对交易进行数字签名。
 
 peer的角色：
 - Leader peer，当一个组织在channel中有多个peer的时候，leader peer负责向组织中其他peer分发来自orderer的交易。一个peer可以选择参加静态（配置指定leader）或者动态（动态选举）的leader select。一个组织可以有一个或者多个leader
-- Anchor peer，当一个peer需要和另一个组织通讯的时候，可以使用channel配置中为那个组织定义的anchor peer。一个组织可以有0或者多个anchor peer。
+- Anchor peer，当一个peer需要和另一个组织通讯的时候，可以使用channel配置中为那个组织定义的anchor peer。一个组织可以有0或者多个anchor peer，一个anchor peer可以负责多种跨组织通讯场景。
 
 chaincode只需要实例化一次，新加进来的节点如果要执行chaincode只需要安装，不需要再实例化。
 
@@ -90,17 +90,17 @@ chaincode只需要实例化一次，新加进来的节点如果要执行chaincod
 ### Adding a new channel
 网络和channel配置随着时间变化，有一个进程专门产生配置transaction，捕获配置变更。每个配置变更都会产生一个configuration block transaction。
 
-网络和channel配置封装了网络成员同意的策略，用于控制网络资源的访问权限。这两种配置非常重要，网络或者channel的成员只是按照配置运行。这些配置逻辑上只有一份，网络的一份，channel的一份，但是每个peer会在物理上保存一份channel配置副本，每个orderer会保存网络配置的副本。
+网络配置和channel配置封装了网络成员同意的策略，用于控制网络资源的访问权限。这两种配置非常重要，网络或者channel的成员只是按照配置运行。这些配置逻辑上只有一份，一份网络配置，每个channel一份自己的channel配置，但是每个peer会在物理上保存一份channel配置副本，每个orderer会保存网络配置的副本。
 configuration transaction保持一致使用的区块链技术和user transaction一样。为了修改配置，管理员要提交一个configuration transaction，这个transaction需要mod_policy指定的组织签名。
-ordering service节点运行一个mini-blockchain，通过system channel连接和分发network configuration transaction。同样的，application channel的peer可以分发channel configuration transaction。通过物理分发保证逻辑唯一是Fabric的通用模式。这种模式是Fabric同时是去中心化也是可管理的。
+ordering service节点运行一个mini-blockchain，通过system channel连接和分发network configuration transaction。同样的，application channel的peer可以分发channel configuration transaction。通过物理分发保证逻辑唯一是Fabric的通用模式。这种模式是让Fabric去中心化的同时也是可管理的。
 
 ### Changing policy
-Fabric认为policy变化是一个常态，不管是组织之间，还是外部监管。policy change通过一个称谓modification policy或者mod_policy管理，是first class policy。
+Fabric认为policy变化是一个常态，不管是组织之间，还是外部监管。policy change通过一个称为modification policy或者mod_policy管理，是first class policy。
 
 
 ## 2.5 Identity
 ### 什么是身份？
-区块链的参与者包括peer、orderer、client application、administrator等，这些参与者都有一个使用X.509封装的数字身份，这个身份用于觉得对网络中资源的许可和其他参与者信息的访问权。数字身份有一些额外的属性（比如组织名称等）用于确定permissioned，在Fabric中数字身份和这些属性称为principal。
+区块链的参与者包括peer、orderer、client application、administrator等，这些参与者都有一个使用X.509封装的数字身份，这个身份用于决定对网络中资源的权限和其他参与者信息的访问权。数字身份有一些额外的属性（比如组织名称等）用于确定permissioned，在Fabric中数字身份和这些属性称为principal。
 身份必须是来自可信任的authority才能被验证，Membership service Provider(MSP)就是用来提供这个功能。MSP定义了管理组织中有效身份的规则，默认的MSP实现使用X.509证书作为身份，采用传统的Public Key Infrastructure (PKI)层级模型。
 
 ### 一个简单的场景
@@ -108,7 +108,7 @@ Fabric认为policy变化是一个常态，不管是组织之间，还是外部�
 
 ### PKI
 public key infrastructure (PKI) 是一系列提供网络安全通讯的技术集合。区块链参与者依赖PKI进行安全通讯，同时保证区块链网络中的消息是已授权的。PKI由下面几部分组成：
-- Digital Certificates，一个包含证书持有者信息的文档，最常用的是 X.509。证书使用密码学技术，一旦被篡改就会失效。只要其他人相信Certificate Authority(CA)，这份证书就可以做完身份证明。
+- Digital Certificates，一个包含证书持有者信息的文档，最常用的是 X.509。证书使用密码学技术，一旦被篡改就会失效。只要其他人相信Certificate Authority(CA)，这份证书就可以做为身份证明。
 - Authentication, Public keys, and Private Keys。验证和数据完整性是安全通讯的重要概念。传统的验证方式使用digital signatures，签名使用私钥加密，使用公钥可以验证签名的有效性。
 - Certificate Authorities，用于颁发证书，只要相信CA就可以信任CA颁发的证书。
 - Root CAs, Intermediate CAs and Chains of Trust。Intermediate CA含有Root CA颁发的证书，自己本身也可以颁发证书，形成下级的中间CA，最终构成一个信任链。
@@ -135,16 +135,16 @@ public key infrastructure (PKI) 是一系列提供网络安全通讯的技术集
 
 
 ## 2.6 MemberShip
-Membership Service Provider (MSP)识别哪些Root CA和Intermediate CA是可信任来定义一个可信域（比如一个组织）的成员，可以通过罗列成员的身份，或者识别哪个CA被授权像成员颁发有效身份，或者两者结合。
-MSP不只是列出网络参与者或者channel成员，还可以指定在MSP代表的组织内的角色(比如管理员)，在网络和channel环境下定义访问权限。channel MSP的配置会广播到相应组织的成员参与的channel，peers, orderers, and clients维护local MSP在channel之外证明成员信息。
+通过罗列成员的身份，或者识别哪个CA被授权向其成员颁发有效身份，或者两者结合，Membership Service Provider (MSP)识别哪些Root CA和Intermediate CA是可信任的，可以用来定义一个可信域（比如一个组织）的成员，
+MSP不只是列出网络参与者或者channel成员，还可以指定在MSP代表的组织内的角色(比如管理员)，在网络和channel环境下定义访问权限(比如channel admins, readers, writers)。channel MSP的配置会广播到相应组织的成员参与的channel。peers, orderers, and clients在channel之外维护local MSP用于验证成员信息和定义对某些组件的权限(比如是否可以安装chaincode)。
 
 ### Mapping MSPs to Organizations
-organization是一个受控的成员组，可以是一家跨国公司，也可以是一家花店。==organization最终的是使用一个MSP来管理成员==，这个和X.509的组织的概念不一样。org和MSP的一对一关系适合降MSP命名为ORG1-MSP，有些场景下一个组织有多个成员组，可以再加后缀区分：ORG2-MSP-NATIONAL和ORG2-MSP-GOVERNMENT，==代表不同的信任Root==。
+organization是一个受控的成员组，可以是一家跨国公司，也可以是一家花店。==organization最终使用一个MSP来管理成员==，这个和X.509的组织的概念不一样。org和MSP的一对一关系适合将MSP命名为ORG1-MSP，有些场景下一个组织有多个成员组，可以再加后缀区分：ORG2-MSP-NATIONAL和ORG2-MSP-GOVERNMENT，==代表不同的信任Root==。
 一个org经常被分成多个的organizational units (OUs)，每个ou具有不同的职责，X.509证书中的OU字段指定身份所属的业务线。OU可以用来控制org中的哪部分属于某个区块链网络的成员。另外在一个由多个org组成的consortium里，使用同一个CA，即同一个信任链，这时候OU可以用来区分不同的org。
 
 ### Local and Channel MSPs
-MSP出现在区块链的两个地方：channel配置(channel MSP)和参与者本地(local MSP)。Local MSP是定义给client(比如用户，比如在chaincode交易的时候在用户侧证明自己是channel的一个成员，或者作为系统的某个角色，比如交易配置管理员)和node(比如peer和orderer，定义node的permission)。
-每个node或者user都要定义一个local MSP来指定在node或者user这个level上的管理或者参与权。channel MSP指定在channel这个level上的管理或者参与权，参与到channel的每个组织都必须有一个MSP，peer和orderer共享channel MSPs相同的视图，可以证明网络参与者。这意味着如果一个组织要加入到一个channel，含有这个组织成员信任链的MSP必须加入到channel配置中，否则这个组织提起的交易会被拒绝。
+MSP出现在区块链的两个地方：channel配置(channel MSP)和参与者本地(local MSP)。Local MSP是定义给client(比如用户在chaincode交易的时候在用户侧证明自己是channel的一个成员，或者作为系统的某个角色，比如交易配置管理员)和node(比如peer和orderer，定义node的permission)。
+每个node或者user都要定义一个local MSP来指定在node或者user这个level上的管理或者参与权。channel MSP指定在channel这个level上的管理或者参与权，参与到channel的每个组织都必须有一个MSP，peer和orderer共享channel MSPs相同的视图，可以证明网络参与者。这意味着如果一个组织要加入到一个channel，含有这个组织成员信任链的MSP必须加入到channel配置中，否则这个组织发起的交易会被拒绝。
 local MSP和channel MSP的功能都是将身份转成角色，关键的区别在于他们的scope。
 ![undefined](http://hyperledger-fabric.readthedocs.io/en/latest/_images/membership.diagram.4.png) 
 上图中当B要在peer上安装一个智能合约的时候，peer会检查local MSP上是否有对用户的授权。如果B使用RCA1授权则可以安装成功。当B要在channel上实例化智能合约的时候，由于是channel上的操作，需要检查channel上所有的channel MSP是否验证通过。
@@ -154,7 +154,7 @@ local MSP和channel MSP的功能都是将身份转成角色，关键的区别在
 local MSP和channel MSP的拆分反应了对本地资源和channel资源管理的需求，可以认为是在不同的level上，高level的反应了网络管理需求，低level的用于处理私有资源的管理身份。每个level都需要定义MSP。
 ![MSP level](http://hyperledger-fabric.readthedocs.io/en/latest/_images/membership.diagram.2.png) 
 
-- Network MSP，通过为参与组织定义MSP来定义谁是网络的成员，这些成员哪些被授权执行管理任务。
+- Network MSP，通过为参与组织定义MSP来定义谁是网络的成员，这些成员哪些被授权执行管理任务。==在哪里定义？==
 - Channel MSP，channel需要单独对自己成员的MSPs进行管理，channel在不同的组织之间建立私人通讯，反过来这些组织可以对channel进行管理。在channel MSPs的背景下，Channel policies可以理解为定义了哪些成员可以对channel进行某种操作，比如增加org，实例化智能合约。管理channel和管理网络两者之间没有什么关系
 - Peer MSP，概念上和Channel MSP的功能相同，但是只能应用在local MSP定义的peer上，比如对能否在当前peer上安装智能合约进行验证。
 - Orderer MSP
@@ -209,7 +209,7 @@ peer从CA拿到一张数字证书作为自己的身份，网络中的每个peer�
 ### Peers and Orderers
 一个peer需要其他peer通过一个ledger更新操作，然后才能应用到这个peer的本地ledger，这个过程称为consensus。当所有要求的peer通过了这个交易并且交易提交给ledger，peer会通知application更新成功。这是ledger-update操作比ledger-query多的两个步骤。
 为了保证区块链网络中所有peer的ledger保证一致，需要一个3阶段过程。
-- Phase1: Proposal。application和endorsing peer集合交互，每个endorsing peer为ledger更新提供背书，但是不会讲这个更新写入ledger中。这一步和order无关，只是应用要求背书节点通过更新操作。
+- Phase1: Proposal。application和endorsing peer集合交互，每个endorsing peer为ledger更新提供背书，但是不会将这个更新写入ledger中。这一步和order无关，只是应用要求背书节点通过更新操作。
   阶段1开始的时候，application生成一个transaction proposal，发送给所有需要的背书节点（在背书策略里指定）。每个endorsing peer使用交易提议独立执行chaincode，产生transaction proposal response，这个更新还不会应用到ledger上，而是简单的加上签名，然后返回给application。当application收到足够的带签名的提议响应，第一节点完成。
   ![](http://hyperledger-fabric.readthedocs.io/en/latest/_images/peers.diagram.10.png)
   背书节点的选择依赖endorsement policy（为chaincode定义），定义了哪些组织需要为一个ledger变化提议做背书。这里可以将达成共识理解为每个利益相关的组织必须对账本变更提议做背书，否则这个变化就不能写入账本。
@@ -218,17 +218,17 @@ peer从CA拿到一张数字证书作为自己的身份，网络中的每个peer�
   Phase1结束的时候应用可以选择丢弃不一致的交易响应，提前终止交易流程。如果不一致的交易响应被提交了，也会被拒绝。
 - Phase2: Packaging。上一步单独的endorsement收集到一起作为一个交易，打包到block里。在这个阶段order是主角。order从很多application接收包含交易提议响应的交易，然后对其他交易排序，然后对一批交易打包成一个block，最后分发给连接到order的所有peer，包括之前的endorsing peer。
   ![](http://hyperledger-fabric.readthedocs.io/en/latest/_images/peers.diagram.11.png)
-  order并发接收来自网络中不同channel下不同application的proposed ledger更新，其工作就是把这些更新组织成定义好的顺序，然后打包成block用于分发。这些block最终就称为blockchain的block。当order产生了一个指定大小的block，或者最大超时时间过了，这个block就会发送到连接到特定channel的所有peer上。
+  order并发接收来自网络中不同channel下不同application的proposed ledger更新，其工作就是把这些更新组织成定义好的顺序，然后打包成block用于分发。这些block最终就成为blockchain的block。当order产生了一个指定大小的block，或者最大超时时间过了，这个block就会发送到连接到特定channel的所有peer上。
   block中交易的顺序并不一定是交易到达order的顺序，交易可以按任意顺序打包成block，这个顺序就成为执行的顺序。==重要的不是这个顺序是什么，而是有一个严格的顺序。==
-  严格的交易顺序使得Fabric和其他可以将相同的交易打包到多个不同的block的区块链有点不同。在Fabric里这种情况不可能发生，一个orderer稽核产生的block是final的，因为一个交易一旦写入一个block，他在ledger上的位置就是保证不变的。Fabric的finality意味着ledger fork不可能发生。交易一旦写入一个block，在未来任何时间点那个交易的历史不能重写。
+  严格的交易顺序使得Fabric和其他可以将相同的交易打包到多个不同的block的区块链有点不同。在Fabric里这种情况不可能发生，一个orderer集合产生的block是final的，因为一个交易一旦写入一个block，他在ledger上的位置就是保证不变的。Fabric的finality意味着ledger fork不可能发生。交易一旦写入一个block，在未来任何时间点那个交易的历史不能重写。
   peer host ledger和chaincode，orderer一般不会。orderer打包的时候不会关心交易的值是什么，只是简单的打包。这是Fabric的一个重要属性，交易从来不会被丢弃或者de-prioritized。
 - Phase3: Validation。上一步的block分发到每个peer，在peer做完校验后写入ledger。在每个peer上block的每个交易都会被校验，保证交易已经是相关组织背书过的，验证失败的交易不会applied到ledger，但是会保存起来供审计。
   ![](http://hyperledger-fabric.readthedocs.io/en/latest/_images/peers.diagram.12.png)
   peer连接到orderer，当新的block产生的时候，会收到一个copy。每个peer会单独处理这个block，但是和其他peer的处理方式是一致的，因此ledger会保持一致。并不是所有peer都要连接到order上，peer也会通过gossip协议把block传给其他peer，然后那些peer再单独处理。
   peer收到block后会按block中交易的顺序来处理每个交易。对于每个交易，每个peer会验证这个交易是否已经被背书策略规定的组织背书。校验的过程验证相关的组织已经产生相同的结果。这个校验也不同于Phase1的背书检查，Phase1中是application从背书节点接受响应，然后决定要不要发送交易提议，如果application违反了背书策略，发送了错误的交易，这一步的校验还是会拒绝这个交易。
   如果交易是正确背书的，peer会尝试写入ledger。为了做到这个，peer要进行ledger一致性检查，来验证ledger的当前状态和交易更新产生的时候的ledger状态是兼容的。比如block中前面的某个交易可能已经更新了ledger中相同的asset，当前的交易更新不再有效，因此不能写入ledger。通过这种方式每个peer的ledger副本保持一致。
-  peer成功校验每个单独的交易之后就会更新ledger。校验失败的ledger不会applied到ledger，但是会和成功的交易一样保留供审计。这以为着peer上的block和从order上收到的几乎是一样的，除了每个交易上加了有效或者无效的标识。
-  同时这一步也不需要想Phase1那样执行chaincode，因此chaincode只需要在endorsing peer上存在，而不是整个区块链网络。这可以保证chaincode的逻辑对背书组织是机密的，但是chaincode的结果是channel内共享的，这样提高了scalability。
+  peer成功校验每个单独的交易之后就会更新ledger。校验失败的ledger不会applied到ledger，但是会和成功的交易一样保留供审计。这意味着peer上的block和从order上收到的几乎是一样的，除了每个交易上加了有效或者无效的标识。
+  同时这一步也不需要像Phase1那样执行chaincode，因此chaincode只需要在endorsing peer上存在，而不是整个区块链网络。这可以保证chaincode的逻辑对背书组织是机密的，但是chaincode的结果是channel内共享的，这样提高了scalability。
   最后每次block提交到ledger上的时候，peer会产生一个事件。Block事件包括所有的block内容，block transaction事件只包含汇总信息，比如block中的每个transaction是否是有效的还是无效的。chaincode事件表示chaincode已经产生结果也是这个时候产生，application可以注册这些事件。
   
 ### Orderers and Consensus
@@ -252,7 +252,7 @@ PDC vs new channel
 为了保证PDC的机密性，当有PDC参与的时候交易流程会出现变化：
 1. 客户端提交提议请求到endorsing peer，这些peer是授权的org的成员。私有数据或者用于在chaincode中生成私有数据的数据放在提议的一个`transient`字段里
 2. endorsing peer执行交易，将私有数据保存在`transient data store`(peer本地上的一个临时存储)，这些peer根据PDC的协议通过gossip向其他授权的peer分发私有数据
-3. endorsing peer向client返回带有公开数据的提议响应，包括私有数据key和value的hash。私有数据不会发送到client
+3. endorsing peer向client返回带有公开数据的提议响应，包括私有数据key、value的hash。私有数据不会发送到client
 4. client应用向ordering service提交交易（含有PDC的hash），然后像正常交易一样写入block，然后分发到所有peer。channel上所有peer都可以使用hash值验证PDC，不需要知道真正的PDC。
 5. 在block commit的时候，peer使用collection 策略决定是否被授权访问私有数据，如果有就检查本地的`transient data store`，看是否已经收到PDC，如果没有会尝试从别的peer拉取，然后使用hash校验数据，最后commit。在validation/commit的时候，私有数据被移动到相应的private state database和private writeset storage，然后从`transient data store`中删除
 
@@ -277,7 +277,7 @@ world state可以随时从blockchain重新生成，因此当一个peer新加入�
 ### Blockchain
 Blockchain是一个交易日志，结构上类似互相连接的block，每个block包含一系列的交易，每个代表对world state的一个查询或者更新。
 每个block的header包括这个block的所有交易的hash和前一个block头部保存的hash值，通过这种方式ledger上所有交易是顺序的，使用密码学连接在一起。这种hash和连接使得ledger数据非常安全。如果有一个节点的ledger被篡改，没法使其他节点相信他的ledger是正确的，因为ledger分布在各个节点上。
-物理上Blockchain实现成一个文件，因为Blockchain的数据结构只有少数几种简单操作，追加到结尾是最主要的操作，查询通常很少。
+物理上Blockchain使用文件来实现，因为Blockchain的数据结构只有少数几种简单操作，追加到结尾是最主要的操作，查询通常很少。
 ![](https://hyperledger-fabric.readthedocs.io/en/latest/_images/ledger.diagram.2.png)
 第一个节点称为genesis block，是ledger的起点，但是不包含任何的用户交易，只包含一个配置交易，包含channel的初始状态。
 
@@ -301,5 +301,5 @@ Blockchain是一个交易日志，结构上类似互相连接的block，每个bl
 
 这些是ledger数据结构的主要部分。
 
-### 
+### World State database options
 当前world state的数据库包括LevelDB和CouchDB，前者是默认选项，尤其适合ledger state是简单的k-v结构。LevelDB嵌入到节点详图的操作系统进程。CouchDB适合JSON格式的ledger state，支持丰富的查询和更新，在操作系统进程外单独运行。
